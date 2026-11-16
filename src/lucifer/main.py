@@ -9,7 +9,7 @@ from lucifer.interface.main_window import LuciferWindow
 
 
 def main() -> None:
-    """Initialize and launch the application."""
+    """Initializing and launch the application."""
 
     app = QApplication(sys.argv)
     app.setApplicationName("LUCIFER")
