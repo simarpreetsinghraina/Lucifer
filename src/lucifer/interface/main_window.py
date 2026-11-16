@@ -1,44 +1,37 @@
 
-"""Main window implementation for LUCIFER."""
+"""Main application window for LUCIFER."""
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QMainWindow, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QMainWindow,
+    QWidget,
+)
+
+from lucifer.interface.styles.theme import build_stylesheet
 
 
 class LuciferWindow(QMainWindow):
-    """Main application window."""
+    """Main dashboard window."""
 
     def __init__(self) -> None:
         super().__init__()
 
         self.setWindowTitle("LUCIFER")
-        self.resize(1100, 700)
-        self.setMinimumSize(800, 550)
+        self.resize(1440, 900)
+        self.setMinimumSize(1100, 700)
 
         self._setup_ui()
+        self.setStyleSheet(build_stylesheet())
 
     def _setup_ui(self) -> None:
-        """Initialize the main window interface."""
+        """Assemble the main dashboard layout."""
 
         central_widget = QWidget()
-        layout = QVBoxLayout(central_widget)
+        main_layout = QHBoxLayout(central_widget)
 
-        welcome_label = QLabel("LUCIFER")
-        welcome_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        welcome_label.setStyleSheet("""
-            QLabel {
-                color: #E6F1FF;
-                font-size: 42px;
-                font-weight: bold;
-                letter-spacing: 8px;
-            }
-        """)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(16)
 
-        layout.addWidget(welcome_label)
+        # Components will be added in the next steps.
+
         self.setCentralWidget(central_widget)
-
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #10131C;
-            }
-        """)
