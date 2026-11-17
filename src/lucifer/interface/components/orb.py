@@ -1,25 +1,35 @@
 
-"""Animated energy core for LUCIFER."""
+"""LUCIFER - Animated AI energy orb.
+
+Seven states:
+    idle, listening, thinking, speaking,
+    executing, error, offline
+
+Compatible with:
+    orb = LuciferOrb()
+    orb.set_state("thinking")
+    orb.set_voice_level(0.7)
+    orb.set_progress(0.65)
+"""
 
 import math
 import random
 import time
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QSize, QRectF, QPointF
 from PySide6.QtGui import (
     QColor,
     QPainter,
-    QPainterPath,
     QPen,
     QRadialGradient,
+    QConicalGradient,
 )
 from PySide6.QtWidgets import QWidget
 
 
 class LuciferOrb(QWidget):
-    """A layered, animated energy core with smooth state transitions."""
 
-    STATES = (
+    STATES = {
         "idle",
         "listening",
         "thinking",
@@ -27,761 +37,672 @@ class LuciferOrb(QWidget):
         "executing",
         "error",
         "offline",
-    )
-
-    PALETTES = {
-        "idle": ("#72D5E8", "#168DB5", "#071B2B"),
-        "listening": ("#8CEBFF", "#22B9E8", "#092B43"),
-        "thinking": ("#75C8FF", "#287CE0", "#101D42"),
-        "speaking": ("#A0F1FF", "#31A9D5", "#0A2940"),
-        "executing": ("#B0EFFF", "#278FD0", "#102C4A"),
-        "error": ("#FF8888", "#C83D55", "#3B101C"),
-        "offline": ("#637887", "#344B5A", "#111A22"),
     }
 
-    # Animation characteristics for each state.
-    # Values are smoothly interpolated during transitions.
-    PROFILES = {
-        "idle": {
-            "pulse_speed": 1.0,
-            "pulse_amount": 0.045,
-            "orbit_speed": 0.55,
-            "plasma_speed": 0.85,
-            "particle_speed": 1.0,
-            "atmosphere_alpha": 55,
-            "orbit_alpha": 1.0,
-            "plasma_alpha": 1.0,
-            "particle_alpha": 185,
-            "waves": 0.0,
-        },
-        "listening": {
-            "pulse_speed": 2.8,
-            "pulse_amount": 0.075,
-            "orbit_speed": 1.0,
-            "plasma_speed": 1.5,
-            "particle_speed": 1.4,
-            "atmosphere_alpha": 85,
-            "orbit_alpha": 1.2,
-            "plasma_alpha": 1.2,
-            "particle_alpha": 220,
-            "waves": 1.0,
-        },
-        "thinking": {
-            "pulse_speed": 1.8,
-            "pulse_amount": 0.055,
-            "orbit_speed": 1.6,
-            "plasma_speed": 2.0,
-            "particle_speed": 2.0,
-            "atmosphere_alpha": 65,
-            "orbit_alpha": 1.2,
-            "plasma_alpha": 1.1,
-            "particle_alpha": 200,
-            "waves": 0.0,
-        },
-        "speaking": {
-            "pulse_speed": 3.5,
-            "pulse_amount": 0.09,
-            "orbit_speed": 1.1,
-            "plasma_speed": 2.5,
-            "particle_speed": 1.5,
-            "atmosphere_alpha": 90,
-            "orbit_alpha": 1.1,
-            "plasma_alpha": 1.3,
-            "particle_alpha": 225,
-            "waves": 0.0,
-        },
-        "executing": {
-            "pulse_speed": 2.4,
-            "pulse_amount": 0.07,
-            "orbit_speed": 2.2,
-            "plasma_speed": 2.8,
-            "particle_speed": 2.2,
-            "atmosphere_alpha": 80,
-            "orbit_alpha": 1.4,
-            "plasma_alpha": 1.3,
-            "particle_alpha": 220,
-            "waves": 0.0,
-        },
-        "error": {
-            "pulse_speed": 4.0,
-            "pulse_amount": 0.10,
-            "orbit_speed": 2.8,
-            "plasma_speed": 3.0,
-            "particle_speed": 1.6,
-            "atmosphere_alpha": 95,
-            "orbit_alpha": 1.3,
-            "plasma_alpha": 1.2,
-            "particle_alpha": 230,
-            "waves": 0.0,
-        },
-        "offline": {
-            "pulse_speed": 0.0,
-            "pulse_amount": 0.0,
-            "orbit_speed": 0.0,
-            "plasma_speed": 0.0,
-            "particle_speed": 0.0,
-            "atmosphere_alpha": 12,
-            "orbit_alpha": 0.0,
-            "plasma_alpha": 0.0,
-            "particle_alpha": 0,
-            "waves": 0.0,
-        },
+    COLORS = {
+        "idle": QColor("#39BFFF"),
+        "listening": QColor("#00E5FF"),
+        "thinking": QColor("#657BFF"),
+        "speaking": QColor("#36DFFF"),
+        "executing": QColor("#FFAD42"),
+        "error": QColor("#FF405D"),
+        "offline": QColor("#64748B"),
     }
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
+    def __init__(self):
+        super().__init__()
 
         self._state = "idle"
-        self._previous_state = "idle"
+        self._previous_color = QColor(self.COLORS["idle"])
 
-        self._start_time = time.monotonic()
-        self._transition_start = self._start_time
-        self._transition_duration = 0.6
+        self._phase = 0.0
+        self._rotation = 0.0
+        self._voice_level = 0.0
+        self._progress = 0.0
 
-        self._transition_from_palette = [
-            QColor(c) for c in self.PALETTES["idle"]
-        ]
+        self._transition = 1.0
+        self._transition_speed = 2.5
 
-        self._transition_from_visual = dict(
-            self.PROFILES["idle"]
-        )
+        self._last_time = time.perf_counter()
+        self._state_time = 0.0
 
         self._particles = []
-        rng = random.Random(42)
 
-        for _ in range(48):
-            self._particles.append({
-                "angle": rng.uniform(0, math.tau),
-                "radius": rng.uniform(0.66, 1.02),
-                "speed": rng.uniform(0.12, 0.48),
-                "size": rng.uniform(1.0, 2.8),
-                "phase": rng.uniform(0, math.tau),
-            })
+        self._create_particles()
 
-        self.setMinimumSize(250, 250)
-
-        self.setAttribute(
-            Qt.WidgetAttribute.WA_TranslucentBackground
-        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setMinimumSize(220, 220)
 
         self._timer = QTimer(self)
-        self._timer.timeout.connect(self.update)
-        self._timer.start(33)
+        self._timer.timeout.connect(self._animate)
+        self._timer.start(16)
 
-    # ---------------------------------------------------------
-    # State management
-    # ---------------------------------------------------------
+    # --------------------------------------------------
+    # PUBLIC API
+    # --------------------------------------------------
 
-    def set_state(self, state: str) -> None:
-        """Change the orb's operational state smoothly."""
+    @property
+    def state(self):
+        return self._state
 
+    def set_state(self, state: str):
         state = state.lower().strip()
 
         if state not in self.STATES:
-            raise ValueError(f"Unknown orb state: {state}")
+            raise ValueError(
+                f"Invalid orb state: {state}. "
+                f"Available states: {sorted(self.STATES)}"
+            )
 
         if state == self._state:
             return
 
-        self._previous_state = self._state
+        self._previous_color = QColor(self._current_color())
         self._state = state
-        self._transition_start = time.monotonic()
+        self._transition = 0.0
+        self._state_time = 0.0
 
         self.update()
 
-    def get_state(self) -> str:
-        """Return the current operational state."""
+    def set_voice_level(self, level: float):
+        """Set microphone or speech amplitude from 0.0 to 1.0."""
+        self._voice_level = max(0.0, min(1.0, float(level)))
 
-        return self._state
+    def set_progress(self, progress: float):
+        """Set execution progress from 0.0 to 1.0."""
+        self._progress = max(0.0, min(1.0, float(progress)))
+        self.update()
 
-    def _get_transition_progress(self) -> float:
-        """Calculate smooth transition progress."""
+    def sizeHint(self):
+        return QSize(420, 420)
 
-        elapsed = time.monotonic() - self._transition_start
+    # --------------------------------------------------
+    # PARTICLES
+    # --------------------------------------------------
 
-        progress = min(
-            elapsed / self._transition_duration,
+    def _create_particles(self):
+        random.seed(42)
+
+        for _ in range(42):
+            self._particles.append({
+                "angle": random.uniform(0, math.tau),
+                "radius": random.uniform(0.29, 0.48),
+                "speed": random.uniform(0.15, 0.65),
+                "size": random.uniform(1.0, 3.0),
+                "offset": random.uniform(0, math.tau),
+                "alpha": random.randint(65, 190),
+            })
+
+        random.seed()
+
+    # --------------------------------------------------
+    # ANIMATION ENGINE
+    # --------------------------------------------------
+
+    def _animate(self):
+        now = time.perf_counter()
+        dt = min(now - self._last_time, 0.05)
+        self._last_time = now
+
+        self._phase += dt
+        self._state_time += dt
+
+        self._transition = min(
             1.0,
+            self._transition + dt * self._transition_speed
         )
 
-        # Smoothstep easing.
-        return progress * progress * (3.0 - 2.0 * progress)
-
-    @staticmethod
-    def _blend_value(start: float, end: float, amount: float) -> float:
-        """Interpolate between two numeric values."""
-
-        return start + (end - start) * amount
-
-    @staticmethod
-    def _blend_color(
-        start: QColor,
-        end: QColor,
-        amount: float,
-    ) -> QColor:
-        """Interpolate smoothly between two colours."""
-
-        amount = max(0.0, min(amount, 1.0))
-
-        return QColor(
-            round(start.red() + (end.red() - start.red()) * amount),
-            round(start.green() + (end.green() - start.green()) * amount),
-            round(start.blue() + (end.blue() - start.blue()) * amount),
-            round(start.alpha() + (end.alpha() - start.alpha()) * amount),
-        )
-
-    def _get_visual_properties(self, progress: float) -> dict:
-        """Blend the animation properties of both states."""
-
-        old = self.PROFILES[self._previous_state]
-        new = self.PROFILES[self._state]
-
-        return {
-            key: self._blend_value(old[key], new[key], progress)
-            for key in old
+        speeds = {
+            "idle": 0.20,
+            "listening": 0.75,
+            "thinking": 1.25,
+            "speaking": 0.90,
+            "executing": 1.65,
+            "error": 0.55,
+            "offline": 0.04,
         }
 
-    # ---------------------------------------------------------
-    # Main rendering
-    # ---------------------------------------------------------
+        self._rotation += dt * speeds[self._state]
+
+        # Voice input naturally settles when there is no new input.
+        self._voice_level *= max(0.0, 1.0 - dt * 3.5)
+
+        self.update()
+
+    # --------------------------------------------------
+    # COLOR MANAGEMENT
+    # --------------------------------------------------
+
+    def _current_color(self):
+        return QColor(self.COLORS[self._state])
+
+    def _get_color(self):
+        target = self._current_color()
+        start = self._previous_color
+
+        t = self._transition
+        t = t * t * (3.0 - 2.0 * t)
+
+        return QColor(
+            int(start.red() + (target.red() - start.red()) * t),
+            int(start.green() + (target.green() - start.green()) * t),
+            int(start.blue() + (target.blue() - start.blue()) * t),
+        )
+
+    @staticmethod
+    def _with_alpha(color, alpha):
+        result = QColor(color)
+        result.setAlpha(max(0, min(255, int(alpha))))
+        return result
+
+    # --------------------------------------------------
+    # MAIN PAINT EVENT
+    # --------------------------------------------------
 
     def paintEvent(self, event):
-        """Render the animated energy core."""
-
         painter = QPainter(self)
+
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
-        size = min(self.width(), self.height())
+        width = self.width()
+        height = self.height()
 
-        center = QPointF(
-            self.width() / 2,
-            self.height() / 2,
-        )
+        center = QPointF(width / 2, height / 2)
+        unit = min(width, height)
 
-        radius = size * 0.31
-        t = time.monotonic() - self._start_time
+        color = self._get_color()
 
-        progress = self._get_transition_progress()
-        visual = self._get_visual_properties(progress)
+        # Keep the orb centered and responsive to widget size.
+        painter.translate(center)
 
-        old_palette = self.PALETTES[self._previous_state]
-        new_palette = self.PALETTES[self._state]
-
-        primary = self._blend_color(
-            QColor(old_palette[0]),
-            QColor(new_palette[0]),
-            progress,
-        )
-
-        secondary = self._blend_color(
-            QColor(old_palette[1]),
-            QColor(new_palette[1]),
-            progress,
-        )
-
-        dark = self._blend_color(
-            QColor(old_palette[2]),
-            QColor(new_palette[2]),
-            progress,
-        )
-
-        pulse_speed = visual["pulse_speed"]
-        pulse_amount = visual["pulse_amount"]
-
-        pulse = (
-            1.0
-            + pulse_amount * math.sin(t * pulse_speed)
-        )
-
-        # Atmospheric glow.
-        self._draw_atmosphere(
-            painter,
-            center,
-            radius,
-            primary,
-            visual["atmosphere_alpha"],
-            pulse,
-        )
-
-        # Listening waves fade in and out.
-        if visual["waves"] > 0.001:
-            self._draw_listening_waves(
-                painter,
-                center,
-                radius,
-                primary,
-                t,
-                visual["waves"],
-            )
-
-        # Orbital structures.
-        if visual["orbit_alpha"] > 0.001:
-            self._draw_orbits(
-                painter,
-                center,
-                radius,
-                primary,
-                secondary,
-                t,
-                visual["orbit_speed"],
-                visual["orbit_alpha"],
-            )
-
-        # Main energy sphere.
-        self._draw_core(
-            painter,
-            center,
-            radius,
-            primary,
-            secondary,
-            dark,
-            pulse,
-        )
-
-        # Internal plasma currents.
-        if visual["plasma_alpha"] > 0.001:
-            self._draw_plasma(
-                painter,
-                center,
-                radius,
-                primary,
-                secondary,
-                t,
-                visual["plasma_speed"],
-                visual["plasma_alpha"],
-            )
-
-        # Orbiting particles.
-        if visual["particle_alpha"] > 0:
-            self._draw_particles(
-                painter,
-                center,
-                radius,
-                primary,
-                t,
-                visual["particle_speed"],
-                visual["particle_alpha"],
-            )
+        self._draw_outer_glow(painter, unit, color)
+        self._draw_particles(painter, unit, color)
+        self._draw_orbital_rings(painter, unit, color)
+        self._draw_energy_core(painter, unit, color)
 
         painter.end()
 
-    # ---------------------------------------------------------
-    # Atmosphere
-    # ---------------------------------------------------------
+    # --------------------------------------------------
+    # OUTER GLOW
+    # --------------------------------------------------
 
-    def _draw_atmosphere(
-        self,
-        painter,
-        center,
-        radius,
-        color,
-        alpha,
-        pulse,
-    ):
-        """Draw the soft light surrounding the core."""
+    def _draw_outer_glow(self, painter, unit, color):
 
-        glow_radius = radius * 1.75 * pulse
+        pulse = math.sin(self._phase * 1.5) * 0.035
+
+        if self._state == "idle":
+            intensity = 0.55 + pulse
+
+        elif self._state == "listening":
+            intensity = 0.65 + self._voice_level * 0.35
+
+        elif self._state == "thinking":
+            intensity = 0.65 + abs(math.sin(self._phase * 2.0)) * 0.25
+
+        elif self._state == "speaking":
+            intensity = 0.65 + self._voice_level * 0.35
+
+        elif self._state == "executing":
+            intensity = 0.7 + abs(math.sin(self._phase * 3.0)) * 0.2
+
+        elif self._state == "error":
+            intensity = 0.45 + abs(math.sin(self._phase * 8.0)) * 0.35
+
+        else:
+            intensity = 0.18
+
+        radius = unit * (0.40 + pulse)
 
         gradient = QRadialGradient(
-            center,
-            glow_radius,
+            QPointF(0, 0),
+            radius * 1.45,
         )
 
-        inner = QColor(color)
-        inner.setAlpha(max(0, min(255, round(alpha))))
+        gradient.setColorAt(
+            0.0,
+            self._with_alpha(color, 0)
+        )
 
-        middle = QColor(color)
-        middle.setAlpha(max(0, min(255, round(alpha * 0.36))))
+        gradient.setColorAt(
+            0.40,
+            self._with_alpha(color, int(40 * intensity))
+        )
 
-        gradient.setColorAt(0.0, inner)
-        gradient.setColorAt(0.48, middle)
+        gradient.setColorAt(
+            0.72,
+            self._with_alpha(color, int(20 * intensity))
+        )
+
         gradient.setColorAt(1.0, QColor(0, 0, 0, 0))
 
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(gradient)
 
         painter.drawEllipse(
-            center,
-            glow_radius,
-            glow_radius,
+            QRectF(-radius * 1.45, -radius * 1.45,
+                   radius * 2.9, radius * 2.9)
         )
 
-    # ---------------------------------------------------------
-    # Listening waves
-    # ---------------------------------------------------------
+    # --------------------------------------------------
+    # PARTICLE SYSTEM
+    # --------------------------------------------------
 
-    def _draw_listening_waves(
-        self,
-        painter,
-        center,
-        radius,
-        color,
-        t,
-        intensity,
-    ):
-        """Draw expanding sound-wave rings."""
+    def _draw_particles(self, painter, unit, color):
 
-        painter.save()
-        painter.setBrush(Qt.BrushStyle.NoBrush)
+        if self._state == "offline":
+            return
 
-        for i in range(3):
-            phase = (t * 0.65 + i / 3) % 1.0
-
-            wave_radius = radius * (
-                1.22 + phase * 0.65
-            )
-
-            alpha = int(
-                115 * (1.0 - phase) * intensity
-            )
-
-            wave_color = QColor(color)
-            wave_color.setAlpha(
-                max(0, min(255, alpha))
-            )
-
-            pen = QPen(wave_color)
-            pen.setWidthF(1.5)
-
-            painter.setPen(pen)
-
-            painter.drawEllipse(
-                center,
-                wave_radius,
-                wave_radius,
-            )
-
-        painter.restore()
-
-    # ---------------------------------------------------------
-    # Orbital structures
-    # ---------------------------------------------------------
-
-    def _draw_orbits(
-        self,
-        painter,
-        center,
-        radius,
-        primary,
-        secondary,
-        t,
-        orbit_speed,
-        intensity,
-    ):
-        """Draw rotating orbital energy structures."""
-
-        painter.save()
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-
-        orbit_configs = [
-            (1.48, 0.58, 25, 0.32),
-            (1.58, 0.48, -48, -0.24),
-            (1.34, 0.72, 82, 0.18),
-        ]
-
-        for index, (rx, ry, tilt, direction) in enumerate(
-            orbit_configs
-        ):
-            painter.save()
-            painter.translate(center)
-
-            painter.rotate(
-                tilt + t * direction * orbit_speed
-            )
-
-            orbit_color = QColor(
-                primary if index != 1 else secondary
-            )
-
-            base_alpha = 105 if index == 0 else 65
-
-            orbit_color.setAlpha(
-                max(0, min(255, round(base_alpha * intensity)))
-            )
-
-            pen = QPen(orbit_color)
-            pen.setWidthF(
-                1.15 if index == 0 else 0.8
-            )
-
-            painter.setPen(pen)
-
-            painter.drawEllipse(
-                QRectF(
-                    -radius * rx,
-                    -radius * ry,
-                    radius * rx * 2,
-                    radius * ry * 2,
-                )
-            )
-
-            # Luminous orbital marker.
-            marker_angle = (
-                t * direction * orbit_speed
-                + index * 2.1
-            )
-
-            marker_x = math.cos(marker_angle) * radius * rx
-            marker_y = math.sin(marker_angle) * radius * ry
-
-            marker_color = QColor(primary)
-            marker_color.setAlpha(
-                max(0, min(255, round(210 * intensity)))
-            )
-
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(marker_color)
-
-            painter.drawEllipse(
-                QPointF(marker_x, marker_y),
-                3.0,
-                3.0,
-            )
-
-            painter.restore()
-
-        painter.restore()
-
-    # ---------------------------------------------------------
-    # Main energy core
-    # ---------------------------------------------------------
-
-    def _draw_core(
-        self,
-        painter,
-        center,
-        radius,
-        primary,
-        secondary,
-        dark,
-        pulse,
-    ):
-        """Draw the main spherical energy body."""
-
-        core_radius = radius * pulse
-
-        gradient = QRadialGradient(
-            QPointF(
-                center.x() - radius * 0.30,
-                center.y() - radius * 0.35,
-            ),
-            core_radius * 1.75,
-        )
-
-        highlight = QColor(primary)
-        highlight.setAlpha(240)
-
-        mid = QColor(secondary)
-        mid.setAlpha(235)
-
-        deep = QColor(dark)
-        deep.setAlpha(255)
-
-        gradient.setColorAt(0.0, highlight)
-        gradient.setColorAt(0.25, mid)
-        gradient.setColorAt(0.72, deep)
-        gradient.setColorAt(1.0, QColor(3, 9, 17, 255))
+        if self._state == "error":
+            movement = 0.25
+        elif self._state == "executing":
+            movement = 1.8
+        elif self._state == "thinking":
+            movement = 1.35
+        elif self._state == "listening":
+            movement = 0.75
+        else:
+            movement = 0.45
 
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(gradient)
 
-        painter.drawEllipse(
-            center,
-            core_radius,
-            core_radius,
+        for particle in self._particles:
+
+            angle = (
+                particle["angle"]
+                + self._rotation * particle["speed"] * movement
+                + math.sin(
+                    self._phase + particle["offset"]
+                ) * 0.08
+            )
+
+            radius = unit * particle["radius"]
+
+            if self._state == "listening":
+                radius += self._voice_level * 12
+
+            if self._state == "speaking":
+                radius += self._voice_level * 15
+
+            x = math.cos(angle) * radius
+            y = math.sin(angle) * radius
+
+            alpha = particle["alpha"]
+
+            if self._state == "thinking":
+                alpha = int(alpha * (
+                    0.5 + 0.5 * abs(math.sin(
+                        self._phase * 2 + particle["offset"]
+                    ))
+                ))
+
+            elif self._state == "executing":
+                alpha = int(alpha * (
+                    0.55 + 0.45 * abs(math.sin(
+                        self._phase * 4 + particle["offset"]
+                    ))
+                ))
+
+            elif self._state == "error":
+                alpha = int(alpha * (
+                    0.35 + 0.65 * abs(math.sin(
+                        self._phase * 9 + particle["offset"]
+                    ))
+                ))
+
+            particle_color = self._with_alpha(color, alpha)
+
+            painter.setBrush(particle_color)
+
+            size = particle["size"]
+
+            painter.drawEllipse(
+                QPointF(x, y),
+                size,
+                size
+            )
+
+    # --------------------------------------------------
+    # ORBITAL RINGS
+    # --------------------------------------------------
+
+    def _draw_orbital_rings(self, painter, unit, color):
+
+        base = unit * 0.335
+
+        if self._state == "offline":
+            alpha = 30
+        else:
+            alpha = 105
+
+        if self._state == "thinking":
+            rotation_speed = 2.4
+        elif self._state == "executing":
+            rotation_speed = 3.2
+        elif self._state == "listening":
+            rotation_speed = 1.5
+        elif self._state == "error":
+            rotation_speed = 0.8
+        else:
+            rotation_speed = 0.5
+
+        painter.save()
+
+        # Main orbital ring.
+        painter.rotate(math.degrees(self._rotation * rotation_speed))
+
+        pen = QPen(
+            self._with_alpha(color, alpha),
+            1.5
         )
-
-        # Illuminated outer edge.
-        edge = QColor(primary)
-        edge.setAlpha(155)
-
-        pen = QPen(edge)
-        pen.setWidthF(1.5)
 
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
         painter.drawEllipse(
-            center,
-            core_radius,
-            core_radius,
+            QRectF(-base, -base * 0.42, base * 2, base * 0.84)
         )
 
-    # ---------------------------------------------------------
-    # Internal plasma
-    # ---------------------------------------------------------
+        # Secondary tilted orbit.
+        painter.rotate(65)
 
-    def _draw_plasma(
-        self,
-        painter,
-        center,
-        radius,
-        primary,
-        secondary,
-        t,
-        speed,
-        intensity,
-    ):
-        """Draw flowing plasma currents inside the sphere."""
-
-        painter.save()
-
-        clip_path = QPainterPath()
-
-        clip_path.addEllipse(
-            center,
-            radius * 0.96,
-            radius * 0.96,
+        painter.setPen(
+            QPen(
+                self._with_alpha(color, alpha // 2),
+                1.0
+            )
         )
-
-        painter.setClipPath(clip_path)
-
-        for i in range(7):
-            phase = t * speed + i * 0.83
-
-            path = QPainterPath()
-
-            start_x = center.x() - radius * 1.15
-
-            start_y = (
-                center.y()
-                + math.sin(phase) * radius * 0.55
-            )
-
-            path.moveTo(start_x, start_y)
-
-            path.cubicTo(
-                center.x() - radius * 0.5,
-                center.y() - math.cos(phase * 1.1) * radius,
-                center.x() + radius * 0.4,
-                center.y() + math.sin(phase * 0.8) * radius,
-                center.x() + radius * 1.15,
-                center.y() + math.cos(phase) * radius * 0.55,
-            )
-
-            plasma_color = QColor(
-                primary if i % 2 == 0 else secondary
-            )
-
-            base_alpha = 115 if i % 2 == 0 else 75
-
-            plasma_color.setAlpha(
-                max(0, min(255, round(base_alpha * intensity)))
-            )
-
-            pen = QPen(plasma_color)
-
-            pen.setWidthF(
-                1.4 if i % 2 == 0 else 0.9
-            )
-
-            pen.setCapStyle(
-                Qt.PenCapStyle.RoundCap
-            )
-
-            painter.setPen(pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-
-            painter.drawPath(path)
-
-        # Central energy glow.
-        center_glow = QRadialGradient(
-            QPointF(
-                center.x() - radius * 0.05,
-                center.y() - radius * 0.05,
-            ),
-            radius * 0.62,
-        )
-
-        glow_color = QColor(primary)
-        glow_color.setAlpha(
-            max(0, min(255, round(75 * intensity)))
-        )
-
-        center_glow.setColorAt(0.0, glow_color)
-        center_glow.setColorAt(
-            1.0,
-            QColor(0, 0, 0, 0),
-        )
-
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(center_glow)
 
         painter.drawEllipse(
-            center,
-            radius * 0.62,
-            radius * 0.62,
+            QRectF(-base * 1.08, -base * 0.30,
+                   base * 2.16, base * 0.60)
         )
 
         painter.restore()
 
-    # ---------------------------------------------------------
-    # Orbiting particles
-    # ---------------------------------------------------------
+        # Rotating energy arcs.
+        self._draw_energy_arcs(painter, unit, color)
 
-    def _draw_particles(
-        self,
-        painter,
-        center,
-        radius,
-        color,
-        t,
-        speed,
-        intensity,
-    ):
-        """Draw particles orbiting around the energy core."""
+        # Executing progress indicator.
+        if self._state == "executing":
+            self._draw_progress(painter, unit, color)
+
+    # --------------------------------------------------
+    # ENERGY ARCS
+    # --------------------------------------------------
+
+    def _draw_energy_arcs(self, painter, unit, color):
+
+        radius = unit * 0.365
+
+        if self._state == "offline":
+            return
+
+        if self._state == "thinking":
+            arc_count = 4
+            speed = 2.8
+        elif self._state == "executing":
+            arc_count = 5
+            speed = 3.8
+        elif self._state == "listening":
+            arc_count = 3
+            speed = 1.8
+        elif self._state == "speaking":
+            arc_count = 4
+            speed = 2.2
+        else:
+            arc_count = 3
+            speed = 0.8
+
+        for i in range(arc_count):
+
+            start_angle = int(
+                (self._rotation * speed * 57.2958 + i * 120) * 16
+            )
+
+            span = int((35 + i * 8) * 16)
+
+            pen = QPen(
+                self._with_alpha(color, 150 - i * 20),
+                2.0 if i == 0 else 1.2
+            )
+
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+
+            painter.drawArc(
+                QRectF(-radius, -radius, radius * 2, radius * 2),
+                start_angle,
+                span
+            )
+
+    # --------------------------------------------------
+    # EXECUTION PROGRESS
+    # --------------------------------------------------
+
+    def _draw_progress(self, painter, unit, color):
+
+        radius = unit * 0.405
+
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        painter.setPen(
+            QPen(
+                self._with_alpha(color, 35),
+                3
+            )
+        )
+
+        painter.drawEllipse(
+            QRectF(-radius, -radius, radius * 2, radius * 2)
+        )
+
+        pen = QPen(color, 3)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+
+        painter.setPen(pen)
+
+        painter.drawArc(
+            QRectF(-radius, -radius, radius * 2, radius * 2),
+            90 * 16,
+            -int(self._progress * 360 * 16)
+        )
+
+    # --------------------------------------------------
+    # CENTRAL ENERGY CORE
+    # --------------------------------------------------
+
+    def _draw_energy_core(self, painter, unit, color):
+
+        # Different breathing patterns per state.
+        if self._state == "idle":
+            pulse = math.sin(self._phase * 1.5) * 0.025
+            radius = unit * (0.235 + pulse)
+
+        elif self._state == "listening":
+            pulse = self._voice_level * 0.035
+            radius = unit * (0.235 + pulse)
+
+        elif self._state == "thinking":
+            pulse = math.sin(self._phase * 3.0) * 0.025
+            radius = unit * (0.235 + pulse)
+
+        elif self._state == "speaking":
+            pulse = self._voice_level * 0.04
+            radius = unit * (0.235 + pulse)
+
+        elif self._state == "executing":
+            pulse = math.sin(self._phase * 5.0) * 0.018
+            radius = unit * (0.235 + pulse)
+
+        elif self._state == "error":
+            pulse = math.sin(self._phase * 10.0) * 0.025
+            radius = unit * (0.235 + pulse)
+
+        else:
+            radius = unit * 0.22
+
+        # Error glitch displacement.
+        offset_x = 0.0
+        offset_y = 0.0
+
+        if self._state == "error":
+            glitch = math.sin(self._phase * 18)
+
+            if glitch > 0.85:
+                offset_x = math.sin(self._phase * 55) * 4
+                offset_y = math.cos(self._phase * 45) * 2
 
         painter.save()
+        painter.translate(offset_x, offset_y)
+
+        # Soft outer illumination.
+        glow = QRadialGradient(
+            QPointF(0, 0),
+            radius * 1.7
+        )
+
+        glow.setColorAt(
+            0.0,
+            self._with_alpha(color, 95)
+        )
+
+        glow.setColorAt(
+            0.45,
+            self._with_alpha(color, 45)
+        )
+
+        glow.setColorAt(
+            1.0,
+            QColor(0, 0, 0, 0)
+        )
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(glow)
+
+        painter.drawEllipse(
+            QRectF(-radius * 1.7, -radius * 1.7,
+                   radius * 3.4, radius * 3.4)
+        )
+
+        # Solid spherical core with radial illumination.
+        core = QRadialGradient(
+            QPointF(-radius * 0.28, -radius * 0.30),
+            radius * 1.55
+        )
+
+        core.setColorAt(0.0, QColor("#FFFFFF"))
+        core.setColorAt(0.12, self._with_alpha(color, 255))
+        core.setColorAt(0.48, self._with_alpha(color, 245))
+        core.setColorAt(0.78, self._with_alpha(color.darker(150), 255))
+        core.setColorAt(1.0, QColor("#07101D"))
+
+        painter.setBrush(core)
+        painter.setPen(
+            QPen(
+                self._with_alpha(color, 180),
+                1.5
+            )
+        )
+
+        painter.drawEllipse(
+            QRectF(-radius, -radius, radius * 2, radius * 2)
+        )
+
+        # Internal plasma movement.
+        self._draw_internal_plasma(
+            painter,
+            radius,
+            color
+        )
+
+        # Small central highlight.
+        highlight = QRadialGradient(
+            QPointF(-radius * 0.28, -radius * 0.30),
+            radius * 0.42
+        )
+
+        highlight.setColorAt(0.0, QColor(255, 255, 255, 150))
+        highlight.setColorAt(1.0, QColor(255, 255, 255, 0))
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(highlight)
+
+        painter.drawEllipse(
+            QRectF(
+                -radius * 0.65,
+                -radius * 0.65,
+                radius * 1.3,
+                radius * 1.3
+            )
+        )
+
+        painter.restore()
+
+    # --------------------------------------------------
+    # INTERNAL PLASMA
+    # --------------------------------------------------
+
+    def _draw_internal_plasma(self, painter, radius, color):
+
+        painter.save()
+
+        # Keep plasma contained inside the spherical core.
+        painter.setClipRect(
+            QRectF(
+                -radius,
+                -radius,
+                radius * 2,
+                radius * 2
+            )
+        )
+
         painter.setPen(Qt.PenStyle.NoPen)
 
-        for particle in self._particles:
+        for i in range(7):
+
             angle = (
-                particle["angle"]
-                + t * particle["speed"] * speed
+                self._phase * (0.7 + i * 0.13)
+                + i * 1.7
             )
 
-            radius_factor = particle["radius"]
+            orbit = radius * (0.15 + i * 0.085)
 
-            if self._state == "executing":
-                radius_factor += (
-                    0.04
-                    * math.sin(
-                        t * 2.0 + particle["phase"]
-                    )
-                    * intensity
-                )
+            x = math.cos(angle) * orbit
+            y = math.sin(angle * 1.4) * orbit
 
-            x = (
-                center.x()
-                + math.cos(angle) * radius * radius_factor
+            blob_size = radius * (0.12 + 0.025 * math.sin(
+                self._phase * 2 + i
+            ))
+
+            plasma = QRadialGradient(
+                QPointF(x, y),
+                blob_size * 2
             )
 
-            y = (
-                center.y()
-                + math.sin(angle) * radius * radius_factor
+            plasma.setColorAt(
+                0.0,
+                QColor(255, 255, 255, 110)
             )
 
-            flicker = (
-                0.55
-                + 0.45 * math.sin(
-                    t * 2.0 + particle["phase"]
-                )
+            plasma.setColorAt(
+                0.3,
+                self._with_alpha(color.lighter(160), 90)
             )
 
-            particle_color = QColor(color)
-
-            particle_color.setAlpha(
-                max(0, min(255, round(intensity * flicker)))
+            plasma.setColorAt(
+                1.0,
+                QColor(0, 0, 0, 0)
             )
 
-            painter.setBrush(particle_color)
-
-            particle_size = particle["size"]
+            painter.setBrush(plasma)
 
             painter.drawEllipse(
                 QPointF(x, y),
-                particle_size,
-                particle_size,
+                blob_size * 2,
+                blob_size * 2
             )
 
         painter.restore()
