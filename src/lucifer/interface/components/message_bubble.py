@@ -49,20 +49,19 @@ class MessageBubble(QFrame):
             background: transparent;
         """)
 
-        message_label = QLabel(self.message)
-        message_label.setWordWrap(True)
-        message_label.setTextInteractionFlags(
+        self.message_label = QLabel(self.message)
+        self.message_label.setWordWrap(True)
+        self.message_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
-
-        message_label.setStyleSheet("""
+        self.message_label.setStyleSheet("""
             color: #DCE7EF;
             font-size: 13px;
             background: transparent;
         """)
 
         layout.addWidget(sender_label)
-        layout.addWidget(message_label)
+        layout.addWidget(self.message_label)
 
         if self.sender == "user":
             self.setStyleSheet("""
@@ -80,3 +79,9 @@ class MessageBubble(QFrame):
                     border-radius: 12px;
                 }
             """)
+
+    def set_message(self, message: str) -> None:
+        """Update the displayed message."""
+
+        self.message = message
+        self.message_label.setText(message)

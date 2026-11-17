@@ -7,6 +7,7 @@ from PySide6.QtCore import (
     QPropertyAnimation,
     QSize,
     Qt,
+    QThread,
 )
 from PySide6.QtWidgets import (
     QComboBox,
@@ -19,11 +20,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from lucifer.core.ai_worker import AIWorker
+from lucifer.core.conversation import ConversationManager
+
 from lucifer.interface.components.orb import LuciferOrb
 from lucifer.interface.components.sidebar import Sidebar
 from lucifer.interface.components.task_panel import TaskPanel
 from lucifer.interface.components.conversation_view import ConversationView
 from lucifer.interface.components.chat_input import ChatInput
+from lucifer.interface.components.message_bubble import MessageBubble
 from lucifer.interface.styles.theme import build_stylesheet
 
 
@@ -40,6 +45,13 @@ class LuciferWindow(QMainWindow):
         self._text_mode = False
         self._mode_animation = None
 
+        # AI engine
+        self.conversation = ConversationManager()
+        self._ai_thread: QThread | None = None
+        self._ai_worker: AIWorker | None = None
+        self._streaming_bubble: MessageBubble | None = None
+        self._ai_error = False
+
         self._setup_ui()
         self.setStyleSheet(build_stylesheet())
 
@@ -52,6 +64,7 @@ class LuciferWindow(QMainWindow):
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(18)
 
+        # Sidebar
         self.sidebar = Sidebar()
         main_layout.addWidget(self.sidebar)
 
@@ -104,7 +117,6 @@ class LuciferWindow(QMainWindow):
 
         self.orb_layout.addWidget(self.orb_status)
 
-        # Subtle voice transcript
         self.voice_transcript = QLabel("")
         self.voice_transcript.setAlignment(
             Qt.AlignmentFlag.AlignCenter
@@ -123,14 +135,11 @@ class LuciferWindow(QMainWindow):
             alignment=Qt.AlignmentFlag.AlignCenter,
         )
 
-        # Microphone button
+        # Microphone
         self.orbit_mic_button = QPushButton("MIC")
         self.orbit_mic_button.setFixedSize(76, 38)
         self.orbit_mic_button.setCursor(
             Qt.CursorShape.PointingHandCursor
-        )
-        self.orbit_mic_button.setToolTip(
-            "Activate voice input"
         )
         self.orbit_mic_button.clicked.connect(
             self._handle_microphone_request
@@ -144,14 +153,9 @@ class LuciferWindow(QMainWindow):
                 font-size: 11px;
                 font-weight: 700;
             }
-
             QPushButton:hover {
                 background: #203B4D;
                 border: 1px solid #3B718A;
-            }
-
-            QPushButton:pressed {
-                background: #28617A;
             }
         """)
 
@@ -171,7 +175,6 @@ class LuciferWindow(QMainWindow):
             "Error",
             "Offline",
         ])
-
         self.state_selector.currentTextChanged.connect(
             self._change_orb_state
         )
@@ -188,37 +191,57 @@ class LuciferWindow(QMainWindow):
         self.conversation_panel = QWidget()
         self.conversation_panel.setMinimumWidth(300)
 
-        conversation_layout = QVBoxLayout(
+        self.conversation_layout = QVBoxLayout(
             self.conversation_panel
         )
+        self.conversation_layout.setContentsMargins(0, 0, 0, 0)
+        self.conversation_layout.setSpacing(14)
 
-        conversation_layout.setContentsMargins(0, 0, 0, 0)
-        conversation_layout.setSpacing(14)
+        self.orbit_button = QPushButton("←  ORBIT")
+        self.orbit_button.setFixedHeight(38)
+        self.orbit_button.setCursor(
+            Qt.CursorShape.PointingHandCursor
+        )
+        self.orbit_button.clicked.connect(
+            self.show_orbit_mode
+        )
+        self.orbit_button.setStyleSheet("""
+            QPushButton {
+                background: #142A39;
+                color: #78CBE5;
+                border: 1px solid #294455;
+                border-radius: 8px;
+                padding: 0 14px;
+                font-size: 10px;
+                font-weight: 700;
+                text-align: left;
+            }
+            QPushButton:hover {
+                background: #203B4D;
+                border: 1px solid #3B718A;
+            }
+        """)
+
+        self.conversation_layout.addWidget(self.orbit_button)
 
         self.conversation_view = ConversationView()
-
-        conversation_layout.addWidget(
+        self.conversation_layout.addWidget(
             self.conversation_view,
             1,
         )
 
-        # ----------------------------------
         # Shared chat input
-        # ----------------------------------
-
         self.chat_input = ChatInput()
 
         self.chat_input.message_submitted.connect(
             self._handle_message
         )
-
         self.chat_input.microphone_requested.connect(
             self._handle_microphone_request
         )
 
         self.orb_layout.addWidget(self.chat_input)
 
-        # Hidden until first typed message
         self.conversation_panel.hide()
 
         workspace_layout.addWidget(self.orb_panel, 1)
@@ -229,24 +252,155 @@ class LuciferWindow(QMainWindow):
 
         main_layout.addWidget(self.workspace, 1)
 
-        # Right task monitoring panel
+        # Task monitoring panel
         self.task_panel = TaskPanel()
         main_layout.addWidget(self.task_panel)
 
         self.setCentralWidget(central_widget)
 
+    # ----------------------------------
+    # Conversation handling
+    # ----------------------------------
+
     def _handle_message(self, message: str) -> None:
-        """Handle manually submitted text messages."""
+        """Send a user message to the AI engine."""
+
+        if self._ai_thread is not None:
+            if self._ai_thread.isRunning():
+                return
 
         if not self._text_mode:
             self._enter_text_mode()
+
+        try:
+            self.conversation.add_user_message(message)
+        except ValueError:
+            return
 
         self.conversation_view.add_message(
             message,
             "user",
         )
 
-        self.orb_status.setText("AI ENGINE NOT CONNECTED")
+        self._streaming_bubble = (
+            self.conversation_view.add_streaming_message(
+                "lucifer"
+            )
+        )
+
+        self._ai_error = False
+
+        self.orb.set_state("thinking")
+        self.orb_status.setText("THINKING")
+
+        self.chat_input.set_input_enabled(False)
+
+        # Create background thread and worker.
+        thread = QThread(self)
+        worker = AIWorker(self.conversation)
+
+        worker.moveToThread(thread)
+
+        # Start AI generation.
+        thread.started.connect(worker.run)
+
+        # Stream generated tokens into the conversation.
+        worker.token_received.connect(
+            self._append_response_token
+        )
+
+        worker.response_finished.connect(
+            self._handle_response_finished
+        )
+
+        worker.error_occurred.connect(
+            self._handle_ai_error
+        )
+
+        # Clean up worker and thread.
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+
+        thread.finished.connect(
+            self._on_ai_thread_finished
+        )
+        thread.finished.connect(thread.deleteLater)
+
+        self._ai_thread = thread
+        self._ai_worker = worker
+
+        thread.start()
+
+    def _append_response_token(self, token: str) -> None:
+        """Append an incoming token to the assistant bubble."""
+
+        if self._streaming_bubble is None:
+            return
+
+        updated_message = (
+            self._streaming_bubble.message + token
+        )
+
+        self._streaming_bubble.set_message(updated_message)
+
+        # Keep the newest generated text visible.
+        self.conversation_view._scroll_to_bottom()
+
+    def _handle_response_finished(
+        self,
+        response: str,
+    ) -> None:
+        """Handle successful AI response completion."""
+
+        if self._streaming_bubble is not None:
+            if not response:
+                self._streaming_bubble.set_message(
+                    "I couldn't generate a response."
+                )
+
+        self.orb.set_state("idle")
+        self.orb_status.setText("SYSTEM READY")
+
+    def _handle_ai_error(self, error: str) -> None:
+        """Display AI provider errors."""
+
+        self._ai_error = True
+
+        error_message = (
+            f"I encountered a problem while generating "
+            f"that response:\n{error}"
+        )
+
+        if self._streaming_bubble is not None:
+            self._streaming_bubble.set_message(
+                error_message
+            )
+        else:
+            self.conversation_view.add_message(
+                error_message,
+                "lucifer",
+            )
+
+        self.orb.set_state("error")
+        self.orb_status.setText("AI ENGINE ERROR")
+
+    def _on_ai_thread_finished(self) -> None:
+        """Release worker references and restore input."""
+
+        self._ai_worker = None
+        self._ai_thread = None
+        self._streaming_bubble = None
+
+        self.chat_input.set_input_enabled(True)
+        self.chat_input.message_field.setFocus()
+
+        if not self._ai_error:
+            self.orb.set_state("idle")
+            self.orb_status.setText("SYSTEM READY")
+
+    # ----------------------------------
+    # Layout transitions
+    # ----------------------------------
 
     def _enter_text_mode(self) -> None:
         """Move the orb left and reveal conversation history."""
@@ -256,26 +410,21 @@ class LuciferWindow(QMainWindow):
 
         self._text_mode = True
 
-        # Capture the current dimensions.
         panel_start_width = self.orb_panel.width()
         orb_start_size = self.orb.size()
 
-        # Move the shared chat input into the conversation panel.
         self.orb_layout.removeWidget(self.chat_input)
+        self.conversation_layout.addWidget(
+            self.chat_input
+        )
 
-        conversation_layout = self.conversation_panel.layout()
-        conversation_layout.addWidget(self.chat_input)
-
-        # Reveal conversation history.
         self.conversation_panel.show()
 
-        # Animate orb panel width.
         panel_animation = QPropertyAnimation(
             self.orb_panel,
             b"maximumWidth",
             self,
         )
-
         panel_animation.setDuration(600)
         panel_animation.setStartValue(panel_start_width)
         panel_animation.setEndValue(280)
@@ -283,13 +432,11 @@ class LuciferWindow(QMainWindow):
             QEasingCurve.Type.InOutCubic
         )
 
-        # Animate orb size.
         orb_animation = QPropertyAnimation(
             self.orb,
             b"maximumSize",
             self,
         )
-
         orb_animation.setDuration(600)
         orb_animation.setStartValue(orb_start_size)
         orb_animation.setEndValue(QSize(220, 220))
@@ -306,11 +453,39 @@ class LuciferWindow(QMainWindow):
 
         self.chat_input.message_field.setFocus()
 
+    def show_orbit_mode(self) -> None:
+        """Return to the centered orb interface."""
+
+        if not self._text_mode:
+            return
+
+        self._text_mode = False
+
+        if self._mode_animation:
+            self._mode_animation.stop()
+
+        self.conversation_layout.removeWidget(
+            self.chat_input
+        )
+        self.orb_layout.addWidget(self.chat_input)
+
+        self.conversation_panel.hide()
+
+        self.orb_panel.setMaximumWidth(16777215)
+        self.orb.setMinimumSize(160, 160)
+        self.orb.setMaximumSize(420, 420)
+
+        self.orb_status.setText("SYSTEM STANDBY")
+        self.voice_transcript.clear()
+
+    # ----------------------------------
+    # Voice and orb controls
+    # ----------------------------------
+
     def _handle_microphone_request(self) -> None:
         """Handle voice activation without changing layout."""
 
         self.orb_status.setText("VOICE INPUT NOT CONNECTED")
-
         self.orb.set_state("listening")
 
         self.voice_transcript.setText(
@@ -324,30 +499,3 @@ class LuciferWindow(QMainWindow):
 
         self.orb.set_state(state_id)
         self.orb_status.setText(state.upper())
-
-    def show_orbit_mode(self) -> None:
-        """Restore the centered orb interface."""
-
-        if not self._text_mode:
-            return
-
-        self._text_mode = False
-
-        if self._mode_animation:
-            self._mode_animation.stop()
-
-        # Move the shared input back under the orb.
-        self.conversation_panel.layout().removeWidget(
-            self.chat_input
-        )
-
-        self.orb_layout.addWidget(self.chat_input)
-
-        self.conversation_panel.hide()
-
-        self.orb_panel.setMaximumWidth(16777215)
-        self.orb.setMinimumSize(160, 160)
-        self.orb.setMaximumSize(420, 420)
-
-        self.orb_status.setText("SYSTEM STANDBY")
-        self.voice_transcript.clear()

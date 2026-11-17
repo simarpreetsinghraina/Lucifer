@@ -12,7 +12,7 @@ from lucifer.interface.components.message_bubble import MessageBubble
 
 
 class ConversationView(QScrollArea):
-    """Display and manage the conversation message history."""
+    """Display and manage conversation message history."""
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -73,26 +73,50 @@ class ConversationView(QScrollArea):
             }
         """)
 
-    def add_message(self, message: str, sender: str) -> None:
-        """Append a message to the conversation."""
+    def add_message(
+        self,
+        message: str,
+        sender: str,
+    ) -> MessageBubble:
+        """Append a completed message."""
 
         bubble = MessageBubble(message, sender)
+        self._insert_bubble(bubble, sender)
+        return bubble
+
+    def add_streaming_message(
+        self,
+        sender: str = "lucifer",
+    ) -> MessageBubble:
+        """Create an initially empty message for streaming."""
+
+        bubble = MessageBubble("", sender)
+        self._insert_bubble(bubble, sender)
+        return bubble
+
+    def _insert_bubble(
+        self,
+        bubble: MessageBubble,
+        sender: str,
+    ) -> None:
+        """Insert a message with the appropriate alignment."""
+
+        alignment = (
+            Qt.AlignmentFlag.AlignRight
+            if sender.lower().strip() == "user"
+            else Qt.AlignmentFlag.AlignLeft
+        )
 
         self.message_layout.insertWidget(
             self.message_layout.count() - 1,
             bubble,
-            alignment=(
-                Qt.AlignmentFlag.AlignRight
-                if sender.lower().strip() == "user"
-                else Qt.AlignmentFlag.AlignLeft
-            ),
+            alignment=alignment,
         )
 
         self._scroll_to_bottom()
 
-
     def _scroll_to_bottom(self) -> None:
-        """Scroll to the latest message after layout updates."""
+        """Scroll to the latest message."""
 
         QTimer.singleShot(
             0,
